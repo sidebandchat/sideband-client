@@ -46,7 +46,7 @@ describe("SBP codec", () => {
   });
 
   it("decodes the canonical account-snapshot fixture", () => {
-    const bytes = Uint8Array.fromHex(
+    const bytes = decodeHex(
       "8300d82550000000000000000000000000000000008201a10001",
     );
     expect(decodeFrame(bytes)).toEqual({
@@ -57,3 +57,9 @@ describe("SBP codec", () => {
     });
   });
 });
+
+function decodeHex(value: string) {
+  return Uint8Array.from(
+    value.match(/.{2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? [],
+  );
+}
