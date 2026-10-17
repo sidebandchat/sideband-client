@@ -1,0 +1,90 @@
+{
+  "name": "@sidebandchat/client",
+  "version": "0.1.0",
+  "description": "Shared application state and client behavior for Sideband applications.",
+  "license": "GPL-3.0-only",
+  "author": {
+    "name": "Sideband LLC",
+    "url": "https://sideband.chat"
+  },
+  "homepage": "https://github.com/sidebandchat/sideband-client",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidebandchat/sideband-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sidebandchat/sideband-client/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "COPYRIGHT",
+    "LICENSE",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./calls/media": {
+      "types": "./dist/calls/media.d.ts",
+      "import": "./dist/calls/media.js"
+    },
+    "./private-conversation/crypto": {
+      "types": "./dist/private-conversation/private-conversation-crypto.d.ts",
+      "import": "./dist/private-conversation/private-conversation-crypto.js"
+    },
+    "./private-conversation/transfers": {
+      "types": "./dist/private-conversation/private-transfer-protocol.d.ts",
+      "import": "./dist/private-conversation/private-transfer-protocol.js"
+    },
+    "./private-conversation/transport": {
+      "types": "./dist/private-conversation/private-transfer-transport.d.ts",
+      "import": "./dist/private-conversation/private-transfer-transport.js"
+    },
+    "./attachments/hash": {
+      "types": "./dist/private-conversation/file-hash.d.ts",
+      "import": "./dist/private-conversation/file-hash.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node scripts/clean.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "package:check": "npm pack --dry-run",
+    "check": "npm run format:check && npm run lint && npm run build && npm run test:coverage && npm run package:check",
+    "prepublishOnly": "npm run check"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.1",
+    "@types/phoenix": "^1.6.7",
+    "@vitest/coverage-v8": "^5.0.3",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "@fishjam-cloud/webrtc-client": "^0.30.1",
+    "@noble/hashes": "^1.8.0",
+    "@scure/base": "^2.4.0",
+    "cbor-x": "^1.6.6",
+    "libomemo.js": "^3.0.0",
+    "phoenix": "^1.8.15"
+  }
+}
