@@ -515,5 +515,7 @@ function positionDiscontinuity(previous: UserTune | undefined, next: UserTune) {
     next.positionMs === undefined
   )
     return false;
-  return Math.abs(previous.positionMs - next.positionMs) >= SEEK_REFRESH_THRESHOLD_MS;
+  return (
+    Math.abs(previous.positionMs - next.positionMs) >= SEEK_REFRESH_THRESHOLD_MS
+  );
 }
