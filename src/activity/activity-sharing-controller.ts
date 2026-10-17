@@ -83,6 +83,7 @@ export type ActivitySharingState = {
 export type ActivitySharingControllerOptions = {
   context: ActivitySharingContext;
   platform: ActivitySharingPlatform;
+  setSharingEnabled?: (enabled: boolean) => Promise<void>;
   publishTune: (tune?: UserTune) => Promise<unknown>;
   formatError: (reason: unknown) => string;
   now?: () => number;
@@ -154,10 +155,12 @@ export class ActivitySharingController {
 
   async setEnabled(enabled: boolean) {
     const previous = this.current.enabled;
-    this.setState({ ...this.current, enabled, error: undefined });
-    this.refreshSessionObservation();
-    this.recomputeTune();
+    this.setState({ ...this.current, error: undefined });
     try {
+      await this.options.setSharingEnabled?.(enabled);
+      this.setState({ ...this.current, enabled });
+      this.refreshSessionObservation();
+      this.recomputeTune();
       await this.options.platform.savePreference(this.context.account, {
         enabled,
         applicationId: this.current.applicationId,
@@ -208,6 +211,8 @@ export class ActivitySharingController {
       const preference = await this.options.platform.loadPreference(
         this.context.account,
       );
+      if (!this.started || generation !== this.generation) return;
+      await this.options.setSharingEnabled?.(preference.enabled);
       if (!this.started || generation !== this.generation) return;
       this.setState({
         ...this.current,

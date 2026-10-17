@@ -219,6 +219,17 @@ export class SidebandClient {
         connected: this.current.connection === "online",
       },
       platform,
+      setSharingEnabled: async (enabled) => {
+        const settings = this.current.account?.realtimeSettings;
+        if (!settings)
+          throw new Error("Realtime settings are unavailable");
+        if (settings.activitySharingEnabled === enabled) return;
+        const updated = await this.realtime.updateSettings({
+          ...settings,
+          activitySharingEnabled: enabled,
+        });
+        this.stateController?.setRealtimeSettings(updated);
+      },
       publishTune: async (tune) => {
         if (!tune) {
           this.realtime.clearActivity("music");

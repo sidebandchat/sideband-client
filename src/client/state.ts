@@ -160,6 +160,10 @@ export class AccountStateController {
     return this.current;
   }
 
+  setRealtimeSettings(settings: RealtimeSettings) {
+    this.set({ ...this.current, realtimeSettings: settings });
+  }
+
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

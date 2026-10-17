@@ -32,6 +32,7 @@ function setup(
 ) {
   let listener: ((change: MediaActivityChange) => void) | undefined;
   const publishTune = vi.fn().mockResolvedValue(undefined);
+  const setSharingEnabled = vi.fn().mockResolvedValue(undefined);
   const platform: ActivitySharingPlatform = {
     loadPreference: vi.fn().mockResolvedValue(preference),
     savePreference: vi.fn().mockResolvedValue(undefined),
@@ -62,12 +63,14 @@ function setup(
       connected: true,
     },
     platform,
+    setSharingEnabled,
     publishTune,
     formatError: String,
   });
   return {
     runtime,
     platform,
+    setSharingEnabled,
     publishTune,
     change: (change: MediaActivityChange) => listener?.(change),
   };
@@ -85,8 +88,7 @@ describe("ActivitySharingController", () => {
     const { runtime, publishTune, change } = setup([playing]);
 
     runtime.start();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
     expect(publishTune).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Dreams", positionMs: 10_000 }),
     );
@@ -110,8 +112,7 @@ describe("ActivitySharingController", () => {
     };
     const { runtime, publishTune, change } = setup([playing]);
     runtime.start();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
     publishTune.mockClear();
 
     change({
@@ -139,6 +140,27 @@ describe("ActivitySharingController", () => {
     runtime.dispose();
   });
 
+  it("enables server sharing before publishing current activity", async () => {
+    const playing = {
+      ...session("spotify", "Spotify.exe", "playing"),
+      title: "Dreams",
+    };
+    const { runtime, setSharingEnabled, publishTune } = setup(
+      [playing],
+      { enabled: false, applicationId: "" },
+    );
+    runtime.start();
+    await vi.waitFor(() => expect(runtime.state.loading).toBe(false));
+
+    await runtime.setEnabled(true);
+
+    expect(setSharingEnabled).toHaveBeenCalledWith(true);
+    expect(setSharingEnabled.mock.invocationCallOrder[0]).toBeLessThan(
+      publishTune.mock.invocationCallOrder[0]!,
+    );
+    runtime.dispose();
+  });
+
   it("stops publishing while disconnected and resumes current activity on reconnect", async () => {
     const playing = {
       ...session("spotify", "Spotify.exe", "playing"),
@@ -146,8 +168,7 @@ describe("ActivitySharingController", () => {
     };
     const { runtime, publishTune } = setup([playing]);
     runtime.start();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
     publishTune.mockClear();
 
     runtime.updateContext({
