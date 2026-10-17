@@ -145,10 +145,10 @@ describe("ActivitySharingController", () => {
       ...session("spotify", "Spotify.exe", "playing"),
       title: "Dreams",
     };
-    const { runtime, setSharingEnabled, publishTune } = setup(
-      [playing],
-      { enabled: false, applicationId: "" },
-    );
+    const { runtime, setSharingEnabled, publishTune } = setup([playing], {
+      enabled: false,
+      applicationId: "",
+    });
     runtime.start();
     await vi.waitFor(() => expect(runtime.state.loading).toBe(false));
 
@@ -157,6 +157,29 @@ describe("ActivitySharingController", () => {
     expect(setSharingEnabled).toHaveBeenCalledWith(true);
     expect(setSharingEnabled.mock.invocationCallOrder[0]).toBeLessThan(
       publishTune.mock.invocationCallOrder[0]!,
+    );
+    runtime.dispose();
+  });
+
+  it("does not enable local publication when server sharing fails", async () => {
+    const { runtime, platform, setSharingEnabled, publishTune } = setup([], {
+      enabled: false,
+      applicationId: "",
+    });
+    runtime.start();
+    await vi.waitFor(() => expect(runtime.state.loading).toBe(false));
+    vi.mocked(setSharingEnabled).mockRejectedValueOnce(new Error("server"));
+    vi.mocked(platform.savePreference).mockClear();
+    publishTune.mockClear();
+
+    await runtime.setEnabled(true);
+
+    expect(runtime.state.enabled).toBe(false);
+    expect(runtime.state.error).toContain("server");
+    expect(platform.savePreference).not.toHaveBeenCalled();
+    expect(publishTune).toHaveBeenCalledWith(undefined);
+    expect(publishTune.mock.calls.some(([tune]) => tune !== undefined)).toBe(
+      false,
     );
     runtime.dispose();
   });

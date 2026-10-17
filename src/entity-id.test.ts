@@ -17,4 +17,11 @@ describe("entity IDs", () => {
     expect(id).toBe(9_223_372_036_854_775_807n);
     expect(idKey(id)).toBe("9223372036854775807");
   });
+
+  it("rejects ordered IDs outside the signed 64-bit range", () => {
+    expect(() => orderedId(-1)).toThrow("Invalid ordered ID");
+    expect(() => orderedId("9223372036854775808")).toThrow(
+      "Invalid ordered ID",
+    );
+  });
 });

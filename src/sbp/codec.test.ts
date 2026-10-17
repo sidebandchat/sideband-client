@@ -29,9 +29,9 @@ describe("SBP codec", () => {
   });
 
   it("encodes timestamps as integer seconds accepted by SBP", () => {
-    expect([
-      ...encodeSbp(new Date("2026-10-17T18:00:00.123Z")),
-    ]).toEqual([...decodeHex("c11a6ad3b7a0")]);
+    expect([...encodeSbp(new Date("2026-10-17T18:00:00.123Z"))]).toEqual([
+      ...decodeHex("c11a6ad3b7a0"),
+    ]);
   });
 
   it("round trips command frames", () => {

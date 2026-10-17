@@ -221,8 +221,7 @@ export class SidebandClient {
       platform,
       setSharingEnabled: async (enabled) => {
         const settings = this.current.account?.realtimeSettings;
-        if (!settings)
-          throw new Error("Realtime settings are unavailable");
+        if (!settings) throw new Error("Realtime settings are unavailable");
         if (settings.activitySharingEnabled === enabled) return;
         const updated = await this.realtime.updateSettings({
           ...settings,
