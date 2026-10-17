@@ -3,6 +3,7 @@ import type { UserId } from "../entity-id.js";
 
 export const PAUSED_ACTIVITY_GRACE_MS = 15_000;
 export const ACTIVITY_REFRESH_MS = 30_000;
+const SEEK_REFRESH_THRESHOLD_MS = 3_000;
 
 export type MediaPlaybackState = "playing" | "paused" | "stopped" | "unknown";
 
@@ -85,6 +86,7 @@ export type ActivitySharingControllerOptions = {
   platform: ActivitySharingPlatform;
   setSharingEnabled?: (enabled: boolean) => Promise<void>;
   publishTune: (tune?: UserTune) => Promise<unknown>;
+  renewTune?: (tune: UserTune) => Promise<unknown>;
   formatError: (reason: unknown) => string;
   now?: () => number;
   setTimer?: typeof setTimeout;
@@ -296,24 +298,34 @@ export class ActivitySharingController {
   }
 
   private recomputeTune() {
-    this.cancelPauseTimer();
     const selected = this.current.enabled
       ? selectActivitySession(this.current.sessions, this.current.applicationId)
       : undefined;
     if (selected?.playbackState === "playing") {
+      this.cancelPauseTimer();
+      const observedAt = this.now();
       const tune = sessionTune(selected);
+      const previous = currentTune(
+        this.lastPlayingTune,
+        this.lastPlayingObservedAt,
+        observedAt,
+      );
+      const seeked = positionDiscontinuity(previous, tune);
       this.lastPlayingTune = tune;
-      this.lastPlayingObservedAt = this.now();
+      this.lastPlayingObservedAt = observedAt;
       this.setTune(tune);
+      if (seeked) this.renewCurrentActivity(tune);
       return;
     }
     if (selected?.playbackState === "paused" && this.lastPlayingTune) {
-      this.pauseTimer = this.setTimer(() => {
-        this.pauseTimer = undefined;
-        this.setTune(undefined);
-      }, PAUSED_ACTIVITY_GRACE_MS);
+      if (this.pauseTimer === undefined)
+        this.pauseTimer = this.setTimer(() => {
+          this.pauseTimer = undefined;
+          this.setTune(undefined);
+        }, PAUSED_ACTIVITY_GRACE_MS);
       return;
     }
+    this.cancelPauseTimer();
     this.setTune(undefined);
   }
 
@@ -350,9 +362,11 @@ export class ActivitySharingController {
   }
 
   private refreshPublicationTimer() {
-    this.cancelRefreshTimer();
-    if (!this.started || !this.context.connected || !this.current.enabled)
+    if (!this.started || !this.context.connected || !this.current.enabled) {
+      this.cancelRefreshTimer();
       return;
+    }
+    if (this.refreshTimer !== undefined) return;
     this.refreshTimer = this.setInterval(() => {
       const tune = currentTune(
         this.lastPlayingTune,
@@ -361,14 +375,30 @@ export class ActivitySharingController {
       );
       if (!tune) return;
       this.lastPublished = JSON.stringify(tune);
-      void this.options.publishTune(tune).catch((reason) => {
+      void (this.options.renewTune ?? this.options.publishTune)(tune).catch(
+        (reason) => {
+          this.clearPublicationState();
+          this.setState({
+            ...this.current,
+            error: this.options.formatError(reason),
+          });
+        },
+      );
+    }, ACTIVITY_REFRESH_MS);
+  }
+
+  private renewCurrentActivity(tune: UserTune) {
+    if (!this.context.connected || !this.current.enabled) return;
+    this.lastPublished = JSON.stringify(tune);
+    void (this.options.renewTune ?? this.options.publishTune)(tune).catch(
+      (reason) => {
         this.clearPublicationState();
         this.setState({
           ...this.current,
           error: this.options.formatError(reason),
         });
-      });
-    }, ACTIVITY_REFRESH_MS);
+      },
+    );
   }
 
   private clearPublicationState() {
@@ -475,4 +505,15 @@ function currentTune(
       tune.positionMs + Math.max(0, now - observedAt),
     ),
   };
+}
+
+function positionDiscontinuity(previous: UserTune | undefined, next: UserTune) {
+  if (
+    !previous ||
+    activitySignature(previous) !== activitySignature(next) ||
+    previous.positionMs === undefined ||
+    next.positionMs === undefined
+  )
+    return false;
+  return Math.abs(previous.positionMs - next.positionMs) >= SEEK_REFRESH_THRESHOLD_MS;
 }

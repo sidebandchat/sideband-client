@@ -7,7 +7,7 @@ import { EphemeralStateController } from "./ephemeral-state.js";
 afterEach(() => vi.useRealTimers());
 
 describe("EphemeralStateController", () => {
-  it("hydrates session-bound presence and expires activity leases", () => {
+  it("hydrates session-bound presence and retains activities until the server clears them", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const controls: Array<
@@ -85,7 +85,7 @@ describe("EphemeralStateController", () => {
     });
     vi.advanceTimersByTime(2_001);
     expect(controller.state.presence.get(userId)?.availability).toBe("online");
-    expect(controller.state.activities.size).toBe(0);
+    expect(controller.state.activities.size).toBe(1);
   });
 
   it("clears a stuck typing lease locally", () => {
@@ -425,16 +425,7 @@ describe("EphemeralStateController", () => {
                   [2, new Date()],
                   [3, new Date()],
                   [4, new Date(Date.now() + 30_000)],
-                  [
-                    5,
-                    [
-                      0,
-                      new Map([
-                        [0, "Channel song"],
-                        [3, 2],
-                      ]),
-                    ],
-                  ],
+                  [5, [0, new Map([[1, ["Channel artist"]]])]],
                 ]),
               ],
             ]),
@@ -451,7 +442,7 @@ describe("EphemeralStateController", () => {
     );
     expect(
       [...controller.state.activities.values()][0]?.activity.payload,
-    ).toMatchObject({ title: "Channel song" });
+    ).toEqual({ artist: "Channel artist", playbackState: "playing" });
 
     receive({
       kind: "control",

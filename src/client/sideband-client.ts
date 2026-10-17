@@ -244,6 +244,16 @@ export class SidebandClient {
           payload: tune,
         });
       },
+      renewTune: async (tune) => {
+        const sampledAt = new Date();
+        this.realtime.renewActivity({
+          id: activityId,
+          kind: "music",
+          sampledAt,
+          expiresAt: new Date(sampledAt.getTime() + 90_000),
+          positionMs: tune.positionMs,
+        });
+      },
       formatError: (reason) =>
         reason instanceof Error ? reason.message : "Music sharing failed",
     });

@@ -144,17 +144,23 @@ export class SbpCommunitiesClient {
     channelId: ChannelId,
     options: { cursor?: string; limit?: number; online?: boolean } = {},
   ) {
-    return decodeCommunityMemberPage(
-      await this.transport.command(
-        209,
-        wireMap([
-          [0, entityRef("channel", channelId)],
-          ...optionalEntry(1, options.cursor),
-          ...optionalEntry(2, options.limit),
-          ...optionalEntry(3, options.online),
-        ]),
-      ),
+    const response = await this.transport.command(
+      209,
+      wireMap([
+        [0, entityRef("channel", channelId)],
+        ...optionalEntry(1, options.cursor),
+        ...optionalEntry(2, options.limit),
+        ...optionalEntry(3, options.online),
+      ]),
     );
+    try {
+      return decodeCommunityMemberPage(response);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      throw new TypeError(`Invalid channel member page: ${message}`, {
+        cause: reason,
+      });
+    }
   }
 
   async clearChannelMemberWatch() {

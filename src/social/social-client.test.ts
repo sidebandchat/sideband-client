@@ -4,6 +4,18 @@ import { decodeEntityRef, entityRef, wireMap } from "../sbp/codec.js";
 import { SbpSocialClient } from "./social-client.js";
 
 describe("SbpSocialClient", () => {
+  it("refreshes activity details without loading profile metadata", async () => {
+    const command = vi.fn().mockResolvedValue(wireMap([]));
+    const client = new SbpSocialClient({ command });
+
+    await client.refreshActivity(userId);
+
+    expect(command).toHaveBeenCalledWith(
+      35,
+      wireMap([[0, entityRef("user", userId)]]),
+    );
+  });
+
   it("loads, verifies, and publishes profile updates with each avatar intent", async () => {
     const verify = vi.fn(async (profile) => ({ ...profile, bio: "verified" }));
     const onOwnProfile = vi.fn();

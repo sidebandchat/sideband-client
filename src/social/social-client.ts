@@ -53,6 +53,10 @@ export class SbpSocialClient {
     );
   }
 
+  async refreshActivity(userId: UserId) {
+    await this.transport.command(35, wireMap([[0, entityRef("user", userId)]]));
+  }
+
   async updateProfile(input: UpdateProfileInput) {
     const avatar =
       input.avatarId === null

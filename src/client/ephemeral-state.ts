@@ -93,16 +93,24 @@ export class EphemeralStateController {
   }
 
   private receive(frame: Extract<SbpFrame, { kind: "control" }>) {
-    if (frame.opcode === 33)
-      this.putPresence(decodePresence(frame.payload), "global");
-    else if (frame.opcode === 35) this.putTyping(frame.payload);
-    else if (frame.opcode === 37) this.putActivity(frame.payload, "global");
-    else if (frame.opcode === 38) this.replaceSnapshot(frame.payload);
-    else if (frame.opcode === 39) this.putCommunityPresence(frame.payload);
-    else if (frame.opcode === 40) this.putCommunityActivity(frame.payload);
-    else if (frame.opcode === 41) this.replaceCommunitySnapshot(frame.payload);
-    else if (frame.opcode === 42) this.mergeCommunitySnapshot(frame.payload);
-    else if (frame.opcode === 43) this.putCommunityBatch(frame.payload);
+    try {
+      if (frame.opcode === 33)
+        this.putPresence(decodePresence(frame.payload), "global");
+      else if (frame.opcode === 35) this.putTyping(frame.payload);
+      else if (frame.opcode === 37) this.putActivity(frame.payload, "global");
+      else if (frame.opcode === 38) this.replaceSnapshot(frame.payload);
+      else if (frame.opcode === 39) this.putCommunityPresence(frame.payload);
+      else if (frame.opcode === 40) this.putCommunityActivity(frame.payload);
+      else if (frame.opcode === 41)
+        this.replaceCommunitySnapshot(frame.payload);
+      else if (frame.opcode === 42) this.mergeCommunitySnapshot(frame.payload);
+      else if (frame.opcode === 43) this.putCommunityBatch(frame.payload);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      throw new TypeError(`Invalid SBP control ${frame.opcode}: ${message}`, {
+        cause: reason,
+      });
+    }
   }
 
   private putCommunityPresence(payload: unknown) {
@@ -275,9 +283,6 @@ export class EphemeralStateController {
       source === "global" ? this.globalActivities : this.channelActivities;
     activities.set(key, value);
     if (publish) this.publishMerged();
-    this.expire(`activity:${source}:${key}`, value.activity.expiresAt, () =>
-      this.removeActivity(key, source),
-    );
   }
   private removeActivity(
     key: string,
@@ -411,13 +416,15 @@ function decodeActivityPayload(kind: UserActivity["kind"], value: unknown) {
   const map = mapValue(fields);
   const artists = optional(map, 1, arrayValue);
   const states: UserTune["playbackState"][] = ["stopped", "paused", "playing"];
-  const playbackState = states[unsignedValue(required(map, 3))];
-  if (!playbackState) throw new TypeError("Invalid playback state");
+  const playbackState = optional(map, 3, unsignedValue);
+  const decodedPlaybackState =
+    playbackState === undefined ? "playing" : states[playbackState];
+  if (!decodedPlaybackState) throw new TypeError("Invalid playback state");
   return {
-    title: String(required(map, 0)),
+    title: optional(map, 0, String),
     artist: artists?.map(String).join(", "),
     album: optional(map, 2, String),
-    playbackState,
+    playbackState: decodedPlaybackState,
     durationMs: optional(map, 4, unsignedValue),
     positionMs: optional(map, 5, unsignedValue),
     applicationName: optional(map, 8, String),

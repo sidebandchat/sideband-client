@@ -10,7 +10,10 @@ export function mapValue(value: unknown): Map<number, unknown> {
 }
 
 export function required(map: Map<number, unknown>, key: number): unknown {
-  if (!map.has(key)) throw new TypeError(`Missing SBP field ${key}`);
+  if (!map.has(key))
+    throw new TypeError(
+      `Missing SBP field ${key} (available: ${[...map.keys()].join(", ") || "none"})`,
+    );
   return map.get(key);
 }
 

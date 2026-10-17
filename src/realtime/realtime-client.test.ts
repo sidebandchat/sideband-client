@@ -92,6 +92,25 @@ describe("SbpRealtimeClient", () => {
     expect(tune.get(3)).toBe(2);
   });
 
+  it("renews an activity without republishing its metadata", () => {
+    const control = vi.fn();
+    const client = new SbpRealtimeClient({ control, command: vi.fn() });
+
+    client.renewActivity({
+      id: entityId<"activity">("11111111-1111-4111-8111-111111111111"),
+      kind: "music",
+      sampledAt: new Date("2026-10-17T12:00:00Z"),
+      expiresAt: new Date("2026-10-17T12:01:30Z"),
+      positionMs: 42_000,
+    });
+
+    expect(control).toHaveBeenCalledWith(44, expect.any(Map));
+    const payload = control.mock.calls[0]![1];
+    expect(payload.get(1)).toBe(0);
+    expect(payload.get(4)).toBe(42_000);
+    expect(payload.has(5)).toBe(false);
+  });
+
   it("uses the protocol visibility ordering", async () => {
     const command = vi
       .fn()

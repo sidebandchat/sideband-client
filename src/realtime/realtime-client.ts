@@ -23,6 +23,14 @@ export type PublishActivityInput = {
   payload: unknown;
 };
 
+export type RenewActivityInput = {
+  id: ActivityId;
+  kind: PublishActivityInput["kind"];
+  sampledAt: Date;
+  expiresAt: Date;
+  positionMs?: number;
+};
+
 export class SbpRealtimeClient {
   private readonly typingPublications = new Map<
     ConversationId,
@@ -93,6 +101,19 @@ export class SbpRealtimeClient {
 
   clearActivity(kind: PublishActivityInput["kind"]) {
     this.transport.control(36, [activityKindId(kind), null]);
+  }
+
+  renewActivity(input: RenewActivityInput) {
+    this.transport.control(
+      44,
+      wireMap([
+        [0, requestRef(input.id)],
+        [1, activityKindId(input.kind)],
+        [2, input.sampledAt],
+        [3, input.expiresAt],
+        ...optionalEntry(4, input.positionMs),
+      ]),
+    );
   }
 
   async updateSettings(settings: RealtimeSettings) {

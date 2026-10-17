@@ -29,9 +29,11 @@ const session = (
 function setup(
   initialSessions: MediaActivitySession[],
   preference = { enabled: true, applicationId: "" },
+  withRenewal = true,
 ) {
   let listener: ((change: MediaActivityChange) => void) | undefined;
   const publishTune = vi.fn().mockResolvedValue(undefined);
+  const renewTune = vi.fn().mockResolvedValue(undefined);
   const setSharingEnabled = vi.fn().mockResolvedValue(undefined);
   const platform: ActivitySharingPlatform = {
     loadPreference: vi.fn().mockResolvedValue(preference),
@@ -65,6 +67,7 @@ function setup(
     platform,
     setSharingEnabled,
     publishTune,
+    ...(withRenewal ? { renewTune } : {}),
     formatError: String,
   });
   return {
@@ -72,6 +75,7 @@ function setup(
     platform,
     setSharingEnabled,
     publishTune,
+    renewTune,
     change: (change: MediaActivityChange) => listener?.(change),
   };
 }
@@ -85,7 +89,7 @@ describe("ActivitySharingController", () => {
       positionMs: 10_000,
       durationMs: 240_000,
     };
-    const { runtime, publishTune, change } = setup([playing]);
+    const { runtime, publishTune, renewTune, change } = setup([playing]);
 
     runtime.start();
     await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
@@ -98,9 +102,80 @@ describe("ActivitySharingController", () => {
     expect(publishTune).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(ACTIVITY_REFRESH_MS);
-    expect(publishTune).toHaveBeenCalledWith(
+    expect(renewTune).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Dreams", playbackState: "playing" }),
     );
+    runtime.dispose();
+  });
+
+  it("does not postpone lease refreshes for position-only notifications", async () => {
+    vi.useFakeTimers();
+    const playing = {
+      ...session("spotify", "Spotify.exe", "playing"),
+      title: "Dreams",
+      positionMs: 10_000,
+      durationMs: 240_000,
+    };
+    const { runtime, publishTune, renewTune, change } = setup([playing]);
+    runtime.start();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
+    publishTune.mockClear();
+
+    for (
+      let elapsed = 10_000;
+      elapsed < ACTIVITY_REFRESH_MS;
+      elapsed += 10_000
+    ) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      change({
+        kind: "changed",
+        session: { ...playing, positionMs: 10_000 + elapsed },
+      });
+    }
+    expect(renewTune).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(renewTune).toHaveBeenCalledOnce();
+    runtime.dispose();
+  });
+
+  it("renews immediately when playback seeks", async () => {
+    vi.useFakeTimers();
+    const playing = {
+      ...session("spotify", "Spotify.exe", "playing"),
+      title: "Dreams",
+      positionMs: 120_000,
+      durationMs: 240_000,
+    };
+    const { runtime, publishTune, renewTune, change } = setup([playing]);
+    runtime.start();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
+
+    change({ kind: "changed", session: { ...playing, positionMs: 30_000 } });
+
+    expect(renewTune).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Dreams", positionMs: 30_000 }),
+    );
+    runtime.dispose();
+  });
+
+  it("falls back to publication when a transport has no renewal support", async () => {
+    vi.useFakeTimers();
+    const playing = {
+      ...session("spotify", "Spotify.exe", "playing"),
+      title: "Dreams",
+    };
+    const { runtime, publishTune } = setup(
+      [playing],
+      { enabled: true, applicationId: "" },
+      false,
+    );
+    runtime.start();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
+    publishTune.mockClear();
+
+    await vi.advanceTimersByTimeAsync(ACTIVITY_REFRESH_MS);
+    expect(publishTune).toHaveBeenCalledOnce();
     runtime.dispose();
   });
 
@@ -122,6 +197,27 @@ describe("ActivitySharingController", () => {
     await vi.advanceTimersByTimeAsync(PAUSED_ACTIVITY_GRACE_MS - 1);
     expect(publishTune).not.toHaveBeenCalledWith(undefined);
     await vi.advanceTimersByTimeAsync(1);
+    expect(publishTune).toHaveBeenLastCalledWith(undefined);
+    runtime.dispose();
+  });
+
+  it("does not postpone the pause grace period for repeated paused updates", async () => {
+    vi.useFakeTimers();
+    const playing = {
+      ...session("spotify", "Spotify.exe", "playing"),
+      title: "Dreams",
+    };
+    const paused = { ...playing, playbackState: "paused" as const };
+    const { runtime, publishTune, change } = setup([playing]);
+    runtime.start();
+    await vi.waitFor(() => expect(publishTune).toHaveBeenCalled());
+    publishTune.mockClear();
+
+    change({ kind: "changed", session: paused });
+    await vi.advanceTimersByTimeAsync(PAUSED_ACTIVITY_GRACE_MS / 2);
+    change({ kind: "changed", session: paused });
+    await vi.advanceTimersByTimeAsync(PAUSED_ACTIVITY_GRACE_MS / 2);
+
     expect(publishTune).toHaveBeenLastCalledWith(undefined);
     runtime.dispose();
   });
