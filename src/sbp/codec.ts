@@ -34,6 +34,7 @@ const encoder = new Encoder({
   structuredClone: false,
   bundleStrings: false,
   tagUint8Array: false,
+  useTimestamp32: true,
 });
 
 const decoder = new Decoder({

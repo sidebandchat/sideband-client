@@ -28,6 +28,12 @@ describe("SBP codec", () => {
     ]).toEqual([0, 2, 3]);
   });
 
+  it("encodes timestamps as integer seconds accepted by SBP", () => {
+    expect([
+      ...encodeSbp(new Date("2026-10-17T18:00:00.123Z")),
+    ]).toEqual([...decodeHex("c11a6ad3b7a0")]);
+  });
+
   it("round trips command frames", () => {
     const payload = wireMap([[0, entityRef("user", entityId(UUID))]]);
     expect(decodeFrame(encodeCommand(UUID, 20, payload))).toMatchObject({
