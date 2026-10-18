@@ -7,6 +7,9 @@ const communityId = entityId<"community">(
   "11111111-1111-4111-8111-111111111111",
 );
 const channelId = entityId<"channel">("22222222-2222-4222-8222-222222222222");
+const conversationId = entityId<"conversation">(
+  "55555555-5555-4555-8555-555555555555",
+);
 const roleId = entityId<"role">("33333333-3333-4333-8333-333333333333");
 const userId = entityId<"user">("44444444-4444-4444-8444-444444444444");
 
@@ -150,6 +153,7 @@ function channelRecord(kind: "text" | "voice" = "voice") {
     [2, kind === "text" ? 0 : 1],
     [3, "Lounge"],
     [4, 0],
+    [5, entityRef("conversation", conversationId)],
     [6, []],
     [7, 1],
   ]);

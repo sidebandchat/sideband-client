@@ -8,6 +8,7 @@ import type {
   PrivateTransferAdmission,
 } from "../domain.js";
 import type { CallId, PrivateTransferId, UserId } from "../entity-id.js";
+import type { MediaDisconnectReason } from "../calls/media-types.js";
 import type { InstanceEndpoint } from "../instance-endpoint.js";
 
 export type CallMediaParticipant = {
@@ -38,9 +39,24 @@ export type CallMediaState = {
   };
 };
 
+export type CallMediaEvent =
+  | {
+      type: "disconnected";
+      callId: CallId;
+      reason?: MediaDisconnectReason;
+    }
+  | { type: "room-ended"; callId: CallId }
+  | { type: "participant-joined" | "participant-left"; callId: CallId }
+  | {
+      type: "screen-share-started" | "screen-share-stopped";
+      callId: CallId;
+      remote: boolean;
+    };
+
 export type CallMediaAdapter = {
   readonly state: CallMediaState;
   subscribe(listener: () => void): () => void;
+  subscribeEvents?(listener: (event: CallMediaEvent) => void): () => void;
   connect(input: {
     endpoint: InstanceEndpoint;
     localUserId: UserId;
@@ -53,9 +69,11 @@ export type CallMediaAdapter = {
   setMuted(muted: boolean): void | Promise<void>;
   setDeafened(deafened: boolean): void | Promise<void>;
   selectInput(deviceId: string): Promise<void>;
+  selectCamera(deviceId: string): Promise<void>;
   selectOutput(deviceId: string): void | Promise<void>;
   setCameraEnabled(enabled: boolean): Promise<void>;
   startScreenShare(sourceId: string, applicationAudio: boolean): Promise<void>;
+  startCameraShare(deviceId: string): Promise<void>;
   stopScreenShare(): Promise<void>;
   setRemoteVolume(endpointId: string, volume: number): void;
 };
@@ -73,9 +91,13 @@ export type CallMediaPreferences = {
     deafened: boolean;
     inputDeviceId: string;
     outputDeviceId: string;
+    cameraDeviceId?: string;
   }>;
   saveAudio(muted: boolean, deafened: boolean): Promise<void>;
-  saveDevice(kind: "input" | "output", deviceId: string): Promise<void>;
+  saveDevice(
+    kind: "input" | "output" | "camera",
+    deviceId: string,
+  ): Promise<void>;
 };
 
 export type PrivateCryptoHandle = unknown;

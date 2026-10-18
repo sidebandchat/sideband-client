@@ -23,15 +23,22 @@ import {
 } from "../sbp/records.js";
 import type { SbpFrame } from "../sbp/frame.js";
 import type { SbpSession, SbpSessionStatus } from "../sbp/session.js";
+import { SbpProtocolError } from "../sbp/session.js";
 import type {
   CallMediaAdapter,
   PrivateCryptoAdapter,
   PrivateCryptoHandle,
   PrivateTransferAdapter,
   CallMediaPreferences,
+  CallMediaEvent,
 } from "./platform-adapters.js";
 import type { InstanceEndpoint } from "../instance-endpoint.js";
 import { MediaControls } from "../calls/media-controls.js";
+import type {
+  CallLifecycleEvent,
+  CallRuntimeView,
+  CallConnectionState,
+} from "../calls/call-runtime.js";
 import {
   arrayValue,
   bytesValue,
@@ -41,6 +48,8 @@ import {
 } from "../sbp/value.js";
 
 export type LiveSessionState = {
+  currentCallId?: CallId;
+  callConnection: CallConnectionState;
   calls: ReadonlyMap<CallId, CallSession>;
   privateConversations: ReadonlyMap<
     PrivateConversationId,
@@ -56,6 +65,7 @@ export type LiveSessionState = {
 export class SessionRuntime {
   readonly mediaControls?: MediaControls;
   private current: LiveSessionState = {
+    callConnection: "idle",
     calls: new Map(),
     privateConversations: new Map(),
     transfers: new Map(),
@@ -65,6 +75,7 @@ export class SessionRuntime {
   private privateEventListeners = new Set<
     (event: PrivateConversationRealtimeEvent) => void
   >();
+  private callEventListeners = new Set<(event: CallLifecycleEvent) => void>();
   private unsubscribers: Array<() => void> = [];
   private pending: Promise<unknown> = Promise.resolve();
   private cryptoHandles = new Map<PrivateConversationId, PrivateCryptoHandle>();
@@ -73,6 +84,9 @@ export class SessionRuntime {
   private connectingTransfers = new Map<PrivateTransferId, Promise<void>>();
   private transferKeys = new Map<PrivateTransferId, Uint8Array>();
   private transferProgress = new Map<PrivateTransferId, number>();
+  private connectingAnsweredCalls = new Set<CallId>();
+  private watchedCommunityCallIds = new Set<CallId>();
+  private mediaGeneration = 0;
 
   constructor(
     private readonly session: SbpSession,
@@ -84,6 +98,12 @@ export class SessionRuntime {
     private readonly crypto?: PrivateCryptoAdapter,
     private readonly transferAdapter?: PrivateTransferAdapter,
     mediaPreferences?: CallMediaPreferences,
+    private readonly options: {
+      reconnectAttempts?: number;
+      reconnectDelay?: (attempt: number) => Promise<void>;
+      onError?: (reason: unknown) => void;
+      onCallUsers?: (userIds: readonly UserId[]) => void;
+    } = {},
   ) {
     if (media) this.mediaControls = new MediaControls(media, mediaPreferences);
   }
@@ -101,6 +121,45 @@ export class SessionRuntime {
     this.privateEventListeners.add(listener);
     return () => this.privateEventListeners.delete(listener);
   };
+
+  subscribeCallEvents = (listener: (event: CallLifecycleEvent) => void) => {
+    this.callEventListeners.add(listener);
+    return () => this.callEventListeners.delete(listener);
+  };
+
+  callView(): CallRuntimeView {
+    const current = this.current.currentCallId
+      ? this.current.calls.get(this.current.currentCallId)
+      : undefined;
+    const incoming = [...this.current.calls.values()].find(
+      (call) =>
+        openCall(call) &&
+        call.id !== current?.id &&
+        call.originatorId !== this.ownUserId &&
+        ownParticipant(call, this.ownUserId)?.state === "ringing",
+    );
+    return {
+      connection: this.current.callConnection,
+      phase: current ? callPhase(current) : undefined,
+      current,
+      incoming,
+      joinable: new Map(
+        [...this.current.calls].filter(
+          ([, call]) => openCall(call) && call.target.kind !== "user",
+        ),
+      ),
+      pendingParticipantIds:
+        current && current.target.kind === "conversation" && openCall(current)
+          ? current.participants
+              .filter(
+                (participant) =>
+                  participant.userId !== current.originatorId &&
+                  ["invited", "ringing", "joining"].includes(participant.state),
+              )
+              .map((participant) => participant.userId)
+          : [],
+    };
+  }
 
   privateConversationView(id?: PrivateConversationId): PrivateConversationView {
     const session = id
@@ -159,17 +218,25 @@ export class SessionRuntime {
     const unsubscribeStatus = this.session.subscribeStatus?.((status) =>
       this.receiveStatus(status),
     );
+    const unsubscribeMedia = this.media?.subscribeEvents?.((event) =>
+      this.receiveMediaEvent(event),
+    );
     this.unsubscribers = [
       this.session.subscribeEvents((frame) => this.receiveEvent(frame)),
       this.session.subscribeControls((frame) => this.receiveControl(frame)),
       ...(unsubscribeStatus ? [unsubscribeStatus] : []),
+      ...(unsubscribeMedia ? [unsubscribeMedia] : []),
     ];
     void this.mediaControls?.start();
   }
 
   stop() {
+    const currentCallId = this.current.currentCallId;
+    this.mediaGeneration += 1;
     this.unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    if (currentCallId) void this.media?.disconnect(currentCallId);
     this.current = {
+      callConnection: "idle",
       calls: new Map(),
       privateConversations: new Map(),
       transfers: new Map(),
@@ -180,6 +247,7 @@ export class SessionRuntime {
     this.cryptoHandles.clear();
     this.privateInvites.clear();
     this.interruptedPrivateConversations.clear();
+    this.watchedCommunityCallIds.clear();
     for (const transferId of this.connectingTransfers.keys())
       void this.transferAdapter?.disconnect(transferId);
     this.connectingTransfers.clear();
@@ -190,11 +258,13 @@ export class SessionRuntime {
 
   private receiveStatus(status: SbpSessionStatus) {
     if (status.state !== "offline") return;
+    const currentCallId = this.current.currentCallId;
+    this.mediaGeneration += 1;
+    if (currentCallId) void this.media?.disconnect(currentCallId);
+    this.mediaControls?.resetSession();
     const interrupted = [...this.current.privateConversations.values()].filter(
       (session) => session.state !== "ended",
     );
-    if (!interrupted.length) return;
-
     for (const session of interrupted)
       this.interruptedPrivateConversations.add(session.id);
     for (const handle of this.cryptoHandles.values())
@@ -206,8 +276,12 @@ export class SessionRuntime {
     this.connectingTransfers.clear();
     this.transferKeys.clear();
     this.transferProgress.clear();
+    this.watchedCommunityCallIds.clear();
     this.set({
       ...this.current,
+      currentCallId: undefined,
+      callConnection: "idle",
+      calls: new Map(),
       privateConversations: new Map(
         [...this.current.privateConversations].filter(
           ([, session]) => session.state === "ended",
@@ -219,43 +293,52 @@ export class SessionRuntime {
   }
 
   acceptCall(callId: CallId) {
+    return this.enqueue(() => this.acceptCallNow(callId));
+  }
+
+  beginCall(...args: Parameters<SbpCallsClient["start"]>) {
     return this.enqueue(async () => {
-      const activePrivate = [
-        ...this.current.privateConversations.values(),
-      ].find((item) => item.state !== "ended");
-      if (activePrivate) await this.privateConversations.end(activePrivate.id);
-      await this.calls.join(callId);
-      if (!this.media) return;
-      const call = this.current.calls.get(callId);
-      if (!call) throw new Error("The call is not available");
-      try {
-        const admission = await this.calls.admit(callId);
-        await this.media.connect({
-          endpoint: this.endpoint,
-          localUserId: this.ownUserId,
-          call,
-          admission,
-        });
-        await this.calls.mediaConnected(callId);
-      } catch (reason) {
-        await this.media.disconnect(callId).catch(() => undefined);
-        await this.calls.leave(callId).catch(() => undefined);
-        throw reason;
+      if (this.callView().current)
+        throw new Error("End the current call before starting another");
+      const existing = this.findJoinableTarget(args[0]);
+      if (existing) {
+        await this.acceptCallNow(existing.id);
+        return existing;
       }
+      const call = await this.calls.start(...args);
+      this.upsertCall(call);
+      this.selectCurrentCall(call.id);
+      this.setCallConnection("ringing", call);
+      await this.acceptCallNow(call.id);
+      return call;
     });
+  }
+
+  declineCall(callId: CallId) {
+    return this.enqueue(() => this.calls.decline(callId));
   }
 
   leaveCall(callId: CallId) {
     return this.enqueue(async () => {
+      this.mediaGeneration += 1;
+      this.setCallConnection("disconnecting");
       await this.media?.disconnect(callId);
       await this.calls.leave(callId);
+      if (this.current.currentCallId === callId) this.clearCurrentCall();
+      this.mediaControls?.resetSession();
     });
   }
 
-  async startCall(...args: Parameters<SbpCallsClient["start"]>) {
-    const call = await this.calls.start(...args);
-    this.upsert("calls", call, (item) => item.id);
-    return call;
+  startCall(...args: Parameters<SbpCallsClient["start"]>) {
+    return this.enqueue(async () => {
+      if (this.callView().current)
+        throw new Error("End the current call before starting another");
+      const call = await this.calls.start(...args);
+      this.upsertCall(call);
+      this.selectCurrentCall(call.id);
+      this.setCallConnection("ringing", call);
+      return call;
+    });
   }
 
   async startPrivateConversation(peerId: UserId) {
@@ -362,10 +445,9 @@ export class SessionRuntime {
     encryptedAnswer?: Uint8Array,
   ) {
     return this.enqueue(async () => {
-      const activeCall = [...this.current.calls.values()].find(
-        (item) => !["ended", "declined", "expired"].includes(item.state),
-      );
+      const activeCall = this.callView().current;
       if (activeCall) await this.calls.leave(activeCall.id);
+      if (activeCall) this.clearCurrentCall();
       let answer = encryptedAnswer;
       if (this.crypto) {
         const session = this.current.privateConversations.get(id);
@@ -432,8 +514,7 @@ export class SessionRuntime {
   }
 
   private receiveRealtime(opcode: number, payload: unknown, timestamp: Date) {
-    if (opcode === 400)
-      this.upsert("calls", decodeCall(payload), (item) => item.id);
+    if (opcode === 400) this.upsertCall(decodeCall(payload));
     else if (opcode === 401) this.updateCallParticipant(payload);
     else if (opcode === 420) this.receivePrivateEvent(payload, timestamp);
     else if (opcode === 422) {
@@ -575,6 +656,16 @@ export class SessionRuntime {
   }
 
   private receiveControl(frame: Extract<SbpFrame, { kind: "control" }>) {
+    if (frame.opcode === 45) {
+      this.replaceCommunityCalls(frame.payload);
+      return;
+    }
+    if (frame.opcode === 46) {
+      const call = decodeCall(required(mapValue(frame.payload), 1));
+      this.watchedCommunityCallIds.add(call.id);
+      this.upsertCall(call);
+      return;
+    }
     if ([400, 401, 420, 422].includes(frame.opcode)) {
       this.receiveRealtime(frame.opcode, frame.payload, new Date());
       return;
@@ -611,11 +702,21 @@ export class SessionRuntime {
           conversation.encryptedInvitation,
         );
     }
+    const calls = keyed(
+      arrayValue(required(map, 2)).map(decodeCall),
+      (item) => item.id,
+    );
+    const previousCalls = this.current.calls;
+    const previousCurrent = this.callView().current;
+    const currentCallId = selectCurrentCallId(
+      calls,
+      this.ownUserId,
+      this.current.currentCallId,
+    );
     this.set({
-      calls: keyed(
-        arrayValue(required(map, 2)).map(decodeCall),
-        (item) => item.id,
-      ),
+      callConnection: currentCallId ? this.current.callConnection : "idle",
+      currentCallId,
+      calls,
       privateConversations: keyed(
         availablePrivateConversations,
         (item) => item.id,
@@ -623,6 +724,17 @@ export class SessionRuntime {
       transfers: this.current.transfers,
       privateMessages: this.current.privateMessages,
     });
+    for (const call of calls.values())
+      this.emitCallUpdate(call, previousCalls.get(call.id));
+    this.options.onCallUsers?.(
+      [...calls.values()].flatMap((call) =>
+        call.participants.map((item) => item.userId),
+      ),
+    );
+    const nextCurrent = this.callView().current;
+    this.emitCurrentChanged(previousCurrent, nextCurrent);
+    if (previousCurrent && !nextCurrent)
+      this.teardownLocalMedia(previousCurrent.id);
   }
 
   private updateCallParticipant(payload: unknown) {
@@ -645,7 +757,16 @@ export class SessionRuntime {
       ...call.participants.filter((item) => item.userId !== userId),
       { userId, state },
     ];
-    this.upsert("calls", { ...call, participants }, (item) => item.id);
+    const updated = { ...call, participants };
+    this.upsertCall(updated);
+    this.emitCallEvent({
+      type: "participant-state-changed",
+      call: updated,
+      userId,
+      state,
+      previousState: call.participants.find((item) => item.userId === userId)
+        ?.state,
+    });
   }
 
   private connectTransfer(transfer: PrivateTransfer) {
@@ -730,6 +851,159 @@ export class SessionRuntime {
     });
   }
 
+  private async acceptCallNow(callId: CallId) {
+    const activePrivate = [...this.current.privateConversations.values()].find(
+      (item) => item.state !== "ended",
+    );
+    if (activePrivate) await this.privateConversations.end(activePrivate.id);
+    const previous = this.callView().current;
+    if (previous && previous.id !== callId) {
+      this.mediaGeneration += 1;
+      this.setCallConnection("replacing", previous);
+      await this.media?.disconnect(previous.id);
+      await this.calls.leave(previous.id);
+    }
+    const call = this.current.calls.get(callId);
+    if (!call) throw new Error("The call is not available");
+    this.selectCurrentCall(callId);
+    this.setCallConnection("connecting", call);
+    try {
+      await this.calls.join(callId);
+      if (!this.media) {
+        this.setCallConnection("active", call);
+        return;
+      }
+      const admission = await this.calls.admit(callId);
+      await this.media.connect({
+        endpoint: this.endpoint,
+        localUserId: this.ownUserId,
+        call,
+        admission,
+      });
+      await this.calls.mediaConnected(callId);
+      this.setCallConnection("active", call);
+    } catch (reason) {
+      this.mediaGeneration += 1;
+      await this.media?.disconnect(callId).catch(() => undefined);
+      if (call.target.kind !== "user" && staleCallError(reason)) {
+        this.discardCall(callId);
+        this.mediaControls?.resetSession();
+        return;
+      }
+      await this.calls.leave(callId).catch(() => undefined);
+      if (this.current.currentCallId === callId) this.clearCurrentCall();
+      this.mediaControls?.resetSession();
+      throw reason;
+    }
+  }
+
+  private findJoinableTarget(target: CallSession["target"]) {
+    return [...this.callView().joinable.values()].find((call) =>
+      sameCallTarget(call.target, target),
+    );
+  }
+
+  private discardCall(callId: CallId) {
+    const calls = new Map(this.current.calls);
+    const previous = calls.get(callId);
+    const wasCurrent = this.current.currentCallId === callId;
+    calls.delete(callId);
+    this.set({
+      ...this.current,
+      calls,
+      currentCallId:
+        this.current.currentCallId === callId
+          ? undefined
+          : this.current.currentCallId,
+      callConnection:
+        this.current.currentCallId === callId
+          ? "idle"
+          : this.current.callConnection,
+    });
+    if (previous && wasCurrent) this.emitCurrentChanged(previous, undefined);
+  }
+
+  private receiveMediaEvent(event: CallMediaEvent) {
+    if (event.callId !== this.current.currentCallId) return;
+    if (event.type === "room-ended") {
+      void this.terminateMediaCall(event.callId, "room-ended");
+      return;
+    }
+    if (event.type !== "disconnected") return;
+    if (event.reason) {
+      void this.terminateMediaCall(event.callId, event.reason);
+      return;
+    }
+    const generation = ++this.mediaGeneration;
+    this.setCallConnection(
+      "reconnecting",
+      this.current.calls.get(event.callId),
+    );
+    void this.reconnectMedia(event.callId, generation);
+  }
+
+  private async reconnectMedia(callId: CallId, generation: number) {
+    const attempts = this.options.reconnectAttempts ?? 6;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!this.reconnectCurrent(callId, generation)) return;
+      if (attempt > 0)
+        await (this.options.reconnectDelay ?? reconnectDelay)(attempt);
+      if (!this.reconnectCurrent(callId, generation)) return;
+      const call = this.current.calls.get(callId);
+      if (!call || !this.media) return;
+      try {
+        const admission = await this.calls.admit(callId);
+        if (!this.reconnectCurrent(callId, generation)) return;
+        await this.media.connect({
+          endpoint: this.endpoint,
+          localUserId: this.ownUserId,
+          call,
+          admission,
+        });
+        if (!this.reconnectCurrent(callId, generation)) {
+          await this.media.disconnect(callId).catch(() => undefined);
+          return;
+        }
+        await this.calls.mediaConnected(callId);
+        this.setCallConnection("active", call);
+        return;
+      } catch {
+        await this.media.disconnect(callId).catch(() => undefined);
+      }
+    }
+    if (this.reconnectCurrent(callId, generation))
+      await this.terminateMediaCall(callId, "reconnect-failed");
+  }
+
+  private reconnectCurrent(callId: CallId, generation: number) {
+    return (
+      generation === this.mediaGeneration &&
+      this.current.currentCallId === callId
+    );
+  }
+
+  private async terminateMediaCall(
+    callId: CallId,
+    reason:
+      | NonNullable<Extract<CallMediaEvent, { type: "disconnected" }>["reason"]>
+      | "room-ended"
+      | "reconnect-failed",
+  ) {
+    if (this.current.currentCallId !== callId) return;
+    this.mediaGeneration += 1;
+    this.setCallConnection(
+      "disconnecting",
+      this.current.calls.get(callId),
+      reason,
+    );
+    await this.media?.disconnect(callId).catch(() => undefined);
+    await this.calls.leave(callId).catch(() => undefined);
+    if (this.current.currentCallId === callId) this.clearCurrentCall(reason);
+    this.mediaControls?.resetSession();
+    const message = terminalCallMessage(reason);
+    if (message) this.options.onError?.(new Error(message));
+  }
+
   private requireTransfer(id: PrivateTransferId) {
     const transfer = this.current.transfers.get(id);
     if (!transfer) throw new Error("The private transfer is unavailable");
@@ -767,6 +1041,145 @@ export class SessionRuntime {
     this.set({ ...this.current, [name]: values });
   }
 
+  private upsertCall(call: CallSession) {
+    const previous = this.current.calls.get(call.id);
+    const previousCurrent = this.callView().current;
+    const calls = new Map(this.current.calls);
+    calls.set(call.id, call);
+    const currentCallId = selectCurrentCallId(
+      calls,
+      this.ownUserId,
+      this.current.currentCallId,
+    );
+    this.set({ ...this.current, calls, currentCallId });
+    this.emitCallUpdate(call, previous);
+    const nextCurrent = this.callView().current;
+    this.emitCurrentChanged(previousCurrent, nextCurrent);
+    if (previousCurrent && !nextCurrent)
+      this.teardownLocalMedia(previousCurrent.id);
+    this.connectAnsweredDirectCall(call);
+    this.options.onCallUsers?.(call.participants.map((item) => item.userId));
+  }
+
+  private replaceCommunityCalls(payload: unknown) {
+    const map = mapValue(payload);
+    const incoming = arrayValue(required(map, 1)).map(decodeCall);
+    const incomingIds = new Set(incoming.map((call) => call.id));
+    const calls = new Map(this.current.calls);
+
+    for (const callId of this.watchedCommunityCallIds) {
+      if (incomingIds.has(callId)) continue;
+      const call = calls.get(callId);
+      if (call && !locallySelectable(call, this.ownUserId))
+        calls.delete(callId);
+    }
+    for (const call of incoming) calls.set(call.id, call);
+
+    this.watchedCommunityCallIds = incomingIds;
+    this.set({ ...this.current, calls });
+    this.options.onCallUsers?.(
+      incoming.flatMap((call) => call.participants.map((item) => item.userId)),
+    );
+  }
+
+  private connectAnsweredDirectCall(call: CallSession) {
+    const answered = call.participants.some(
+      (participant) =>
+        participant.userId !== this.ownUserId && participant.state === "active",
+    );
+    if (
+      call.target.kind !== "user" ||
+      call.originatorId !== this.ownUserId ||
+      this.current.currentCallId !== call.id ||
+      this.current.callConnection !== "ringing" ||
+      !answered ||
+      this.connectingAnsweredCalls.has(call.id)
+    )
+      return;
+
+    this.connectingAnsweredCalls.add(call.id);
+    void this.acceptCall(call.id).finally(() => {
+      this.connectingAnsweredCalls.delete(call.id);
+    });
+  }
+
+  private selectCurrentCall(callId?: CallId) {
+    const previous = this.callView().current;
+    const currentCallId = selectCurrentCallId(
+      this.current.calls,
+      this.ownUserId,
+      callId,
+    );
+    if (currentCallId === this.current.currentCallId) return;
+    this.set({ ...this.current, currentCallId });
+    this.emitCurrentChanged(previous, this.callView().current);
+  }
+
+  private clearCurrentCall(
+    reason?: Parameters<SessionRuntime["setCallConnection"]>[2],
+  ) {
+    const previous = this.callView().current;
+    const previousState = this.current.callConnection;
+    if (!this.current.currentCallId) return;
+    this.set({
+      ...this.current,
+      currentCallId: undefined,
+      callConnection: "idle",
+    });
+    this.mediaControls?.resetSession();
+    this.emitCurrentChanged(previous, undefined);
+    this.emitCallEvent({
+      type: "connection-state-changed",
+      state: "idle",
+      previousState,
+      call: previous,
+      reason,
+    });
+  }
+
+  private setCallConnection(
+    state: CallConnectionState,
+    call = this.callView().current,
+    reason?: Extract<
+      CallLifecycleEvent,
+      { type: "connection-state-changed" }
+    >["reason"],
+  ) {
+    const previousState = this.current.callConnection;
+    if (state === previousState) return;
+    this.set({ ...this.current, callConnection: state });
+    this.emitCallEvent({
+      type: "connection-state-changed",
+      state,
+      previousState,
+      call,
+      reason,
+    });
+  }
+
+  private teardownLocalMedia(callId: CallId) {
+    this.mediaGeneration += 1;
+    void this.media?.disconnect(callId);
+    this.mediaControls?.resetSession();
+    this.setCallConnection("idle");
+  }
+
+  private emitCallUpdate(call: CallSession, previous?: CallSession) {
+    if (previous === call) return;
+    this.emitCallEvent({ type: "call-updated", call, previous });
+    if (previous && openCall(previous) && !openCall(call))
+      this.emitCallEvent({ type: "call-ended", call });
+  }
+
+  private emitCurrentChanged(previous?: CallSession, call?: CallSession) {
+    if (previous?.id === call?.id) return;
+    this.emitCallEvent({ type: "current-changed", call, previous });
+  }
+
+  private emitCallEvent(event: CallLifecycleEvent) {
+    this.callEventListeners.forEach((listener) => listener(event));
+  }
+
   private set(state: LiveSessionState) {
     this.current = state;
     this.listeners.forEach((listener) => listener());
@@ -782,6 +1195,68 @@ function keyed<Key, Value>(values: Value[], key: (value: Value) => Key) {
   return new Map(values.map((value) => [key(value), value] as const));
 }
 
+function openCall(call: CallSession) {
+  return !["ended", "declined", "expired"].includes(call.state);
+}
+
+function callPhase(call: CallSession): "proposal" | "session" {
+  if (call.target.kind === "user")
+    return call.state === "ringing" ? "proposal" : "session";
+  if (call.target.kind === "channel") return "session";
+  return call.establishedAt ? "session" : "proposal";
+}
+
+function sameCallTarget(
+  left: CallSession["target"],
+  right: CallSession["target"],
+) {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "user" && right.kind === "user")
+    return left.userId === right.userId;
+  if (left.kind === "conversation" && right.kind === "conversation")
+    return left.conversationId === right.conversationId;
+  return (
+    left.kind === "channel" &&
+    right.kind === "channel" &&
+    left.channelId === right.channelId
+  );
+}
+
+function staleCallError(reason: unknown) {
+  return reason instanceof SbpProtocolError && [4, 5].includes(reason.code);
+}
+
+function ownParticipant(call: CallSession, ownUserId: UserId) {
+  return call.participants.find(
+    (participant) => participant.userId === ownUserId,
+  );
+}
+
+function locallyParticipating(call: CallSession, ownUserId: UserId) {
+  const state = ownParticipant(call, ownUserId)?.state;
+  return openCall(call) && (state === "joining" || state === "active");
+}
+
+function locallySelectable(call: CallSession, ownUserId: UserId) {
+  const state = ownParticipant(call, ownUserId)?.state;
+  return (
+    openCall(call) && Boolean(state && state !== "declined" && state !== "left")
+  );
+}
+
+function selectCurrentCallId(
+  calls: ReadonlyMap<CallId, CallSession>,
+  ownUserId: UserId,
+  preferred?: CallId,
+) {
+  const preferredCall = preferred ? calls.get(preferred) : undefined;
+  if (preferredCall && locallySelectable(preferredCall, ownUserId))
+    return preferredCall.id;
+  return [...calls.values()].find((call) =>
+    locallyParticipating(call, ownUserId),
+  )?.id;
+}
+
 function completeTransferMetadata(
   transfer: PrivateTransfer,
 ): transfer is PrivateTransfer & {
@@ -790,4 +1265,26 @@ function completeTransferMetadata(
   sha256: Uint8Array;
 } {
   return Boolean(transfer.filename && transfer.mediaType && transfer.sha256);
+}
+
+function reconnectDelay(attempt: number) {
+  const delay = Math.min(8_000, 1_000 * 2 ** (attempt - 1));
+  return new Promise<void>((resolve) => setTimeout(resolve, delay));
+}
+
+function terminalCallMessage(
+  reason:
+    | import("../calls/media-types.js").MediaDisconnectReason
+    | "room-ended"
+    | "reconnect-failed",
+) {
+  if (reason === "authorization_revoked")
+    return "You no longer have access to this call.";
+  if (reason === "policy_violation")
+    return "The call was ended because of invalid media activity.";
+  if (reason === "replaced")
+    return "This call was opened in another Sideband window.";
+  if (reason === "reconnect-failed")
+    return "The call could not be reconnected.";
+  return undefined;
 }

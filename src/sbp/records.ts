@@ -150,8 +150,8 @@ export function decodeMessage(value: unknown): ChatMessage {
       kind === "invitation" ? decodeInvitationMessage(system) : undefined,
     communityEvent:
       kind === "system" ? decodeCommunityEvent(system, id) : undefined,
-    privateEvent:
-      kind === "call" ? decodePrivateConversationEvent(system) : undefined,
+    callEvent: kind === "call" ? decodeCallEvent(system) : undefined,
+    privateEvent: kind === "call" ? decodePrivateEvent(system) : undefined,
     gif: optional(map, 12, decodeGif),
     reactions,
     mentions: optional(map, 14, (entry) =>
@@ -164,12 +164,26 @@ export function decodeMessage(value: unknown): ChatMessage {
   };
 }
 
-function decodePrivateConversationEvent(
-  value: unknown,
-): ChatMessage["privateEvent"] {
+function decodeCallEvent(value: unknown): ChatMessage["callEvent"] {
   const event = arrayValue(value);
-  if (event.length !== 2 || event[0] !== 5)
-    throw new TypeError("Invalid private conversation event");
+  if (event.length !== 2 || event[0] !== 4) return undefined;
+  const payload = mapValue(event[1]);
+  return {
+    callId: decodeEntityRef(required(payload, 0), "call"),
+    initiatorId: decodeEntityRef(required(payload, 1), "user"),
+    duration: unsignedValue(required(payload, 2)),
+    type: enumValue(
+      required(payload, 3),
+      ["missed", "completed"] as const,
+      "call outcome",
+    ),
+    group: optional(payload, 4, booleanValue) ?? false,
+  };
+}
+
+function decodePrivateEvent(value: unknown): ChatMessage["privateEvent"] {
+  const event = arrayValue(value);
+  if (event.length !== 2 || event[0] !== 5) return undefined;
   const payload = mapValue(event[1]);
   return {
     sessionId: decodeEntityRef(required(payload, 0), "private-conversation"),
@@ -272,6 +286,7 @@ export function decodeCall(value: unknown): CallSession {
     endedAt: optional(map, 6, timestampValue),
     participants: arrayValue(required(map, 7)).map(decodeCallParticipant),
     emptyRoomExpiresAt: optional(map, 8, timestampValue),
+    establishedAt: optional(map, 9, timestampValue),
   };
 }
 
@@ -346,7 +361,7 @@ function decodeCallParticipant(value: unknown): CallParticipant {
       ["invited", "ringing", "joining", "active", "declined", "left"] as const,
       "call participant state",
     ),
-    changedAt: optional(map, 2, timestampValue),
+    joinedAt: optional(map, 2, timestampValue),
   };
 }
 
@@ -561,9 +576,7 @@ export function decodeCommunityChannel(value: unknown): CommunityChannel {
     ),
     name: textValue(required(map, 3)),
     position: integerValue(required(map, 4)),
-    conversationId: optional(map, 5, (entry) =>
-      decodeEntityRef(entry, "conversation"),
-    ),
+    conversationId: decodeEntityRef(required(map, 5), "conversation"),
     permissionOverrides: arrayValue(required(map, 6)).map(
       decodePermissionOverride,
     ),

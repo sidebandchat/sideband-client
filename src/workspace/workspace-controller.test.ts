@@ -19,6 +19,9 @@ const SECOND_CHANNEL_ID = entityId<"channel">(
 const CONVERSATION_ID = entityId<"conversation">(
   "33333333-3333-4333-8333-333333333333",
 );
+const VOICE_CONVERSATION_ID = entityId<"conversation">(
+  "99999999-9999-4999-8999-999999999999",
+);
 const DIRECT_CONVERSATION_ID = entityId<"conversation">(
   "66666666-6666-4666-8666-666666666666",
 );
@@ -44,6 +47,16 @@ function accountState() {
           kind: "community-channel" as const,
           participantIds: [USER_ID],
           channelId: CHANNEL_ID,
+          revision: 1,
+        },
+      ],
+      [
+        VOICE_CONVERSATION_ID,
+        {
+          id: VOICE_CONVERSATION_ID,
+          kind: "community-channel" as const,
+          participantIds: [USER_ID],
+          channelId: VOICE_CHANNEL_ID,
           revision: 1,
         },
       ],
@@ -73,6 +86,7 @@ function accountState() {
             {
               id: VOICE_CHANNEL_ID,
               communityId: COMMUNITY_ID,
+              conversationId: VOICE_CONVERSATION_ID,
               name: "Lounge",
               kind: "voice" as const,
               position: 1,
@@ -168,13 +182,13 @@ describe("WorkspaceController", () => {
     workspace.selectChannel(VOICE_CHANNEL_ID);
 
     expect(workspace.state).toEqual({
-      view: "voice-channel",
+      view: "conversation",
       selectedCommunityId: COMMUNITY_ID,
       selectedChannelId: VOICE_CHANNEL_ID,
-      selectedConversationId: undefined,
+      selectedConversationId: VOICE_CONVERSATION_ID,
     });
     expect(workspace.selectedChannel?.name).toBe("Lounge");
-    expect(workspace.selectedConversation).toBeUndefined();
+    expect(workspace.selectedConversation?.id).toBe(VOICE_CONVERSATION_ID);
   });
 
   it("restores the last selected channel independently for each community", () => {
@@ -186,10 +200,10 @@ describe("WorkspaceController", () => {
     workspace.selectCommunity(COMMUNITY_ID);
 
     expect(workspace.state).toEqual({
-      view: "voice-channel",
+      view: "conversation",
       selectedCommunityId: COMMUNITY_ID,
       selectedChannelId: VOICE_CHANNEL_ID,
-      selectedConversationId: undefined,
+      selectedConversationId: VOICE_CONVERSATION_ID,
     });
   });
 

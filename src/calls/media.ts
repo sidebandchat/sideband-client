@@ -18,7 +18,7 @@ import type {
 import type { UserId } from "../entity-id.js";
 
 const SCREEN_SHARE_MAX_FRAMERATE = 30;
-const SCREEN_SHARE_MAX_BANDWIDTH_KBPS = 3_000;
+const SCREEN_SHARE_MAX_BANDWIDTH_KBPS = 8_000;
 
 type ObservableWebRTCEndpoint = WebRTCEndpoint & {
   on<Event extends keyof WebRTCEndpointEvents>(
@@ -136,9 +136,6 @@ export class SidebandMedia {
     );
     this.endpoint.on("trackReady", (context: TrackContext) => {
       if (!context.track) return;
-      if (context.track.kind === "audio") {
-        context.track.enabled = !this.localEndpointState.deafened;
-      }
       const stream = new MediaStream([context.track]);
       this.callbacks.onRemoteStream(
         context.trackId,
@@ -256,9 +253,6 @@ export class SidebandMedia {
       deafened,
     };
     this.endpoint?.updateEndpointMetadata(this.localEndpointState);
-    Object.values(this.endpoint?.getRemoteTracks() ?? {}).forEach((context) => {
-      if (context.track?.kind === "audio") context.track.enabled = !deafened;
-    });
 
     this.audioStateChange = this.audioStateChange
       .then(async () => {
@@ -279,7 +273,7 @@ export class SidebandMedia {
       });
   }
 
-  async setCameraEnabled(enabled: boolean, displayName: string) {
+  async setCameraEnabled(enabled: boolean, displayName: string, deviceId = "") {
     if (!this.localStream || !this.endpoint)
       throw new Error("Join a call before turning on your camera");
 
@@ -287,7 +281,7 @@ export class SidebandMedia {
     if (enabled) {
       if (currentTrack) return;
 
-      const cameraCapture = await this.capture.captureCamera();
+      const cameraCapture = await this.capture.captureCamera(deviceId);
       const stream = cameraCapture.stream;
       const track = stream.getVideoTracks()[0];
       if (!track) {
@@ -437,7 +431,7 @@ export class SidebandMedia {
       stream.getTracks().forEach((streamTrack) => streamTrack.stop());
       throw new Error(`The selected ${sourceName} could not be captured`);
     }
-    if (sourceName === "screen") track.contentHint = "motion";
+    if (sourceName === "screen") track.contentHint = "detail";
     this.screenStream = stream;
     this.presentationCaptureCleanup = cleanup;
     track.onended = () => {
@@ -492,7 +486,7 @@ export class SidebandMedia {
     if (!sender) return;
 
     const parameters = sender.getParameters();
-    parameters.degradationPreference = "maintain-framerate";
+    parameters.degradationPreference = "maintain-resolution";
     if (parameters.encodings.length === 0) parameters.encodings = [{}];
     parameters.encodings[0].maxFramerate = SCREEN_SHARE_MAX_FRAMERATE;
 

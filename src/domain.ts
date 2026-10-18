@@ -181,7 +181,7 @@ export type CommunityChannel = {
   communityId: CommunityId;
   name: string;
   kind: "text" | "voice";
-  conversationId?: ConversationId;
+  conversationId: ConversationId;
   position: number;
   permissionOverrides: CommunityPermissionOverride[];
   revision: number;
@@ -424,7 +424,7 @@ export type CallTarget =
 export type CallParticipant = {
   userId: UserId;
   state: "invited" | "ringing" | "joining" | "active" | "declined" | "left";
-  changedAt?: string;
+  joinedAt?: string;
 };
 export type CallSession = {
   id: CallId;
@@ -436,6 +436,7 @@ export type CallSession = {
   endedAt?: string;
   participants: CallParticipant[];
   emptyRoomExpiresAt?: string;
+  establishedAt?: string;
 };
 export type MediaAdmission = {
   credential: Uint8Array;

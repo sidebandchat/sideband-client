@@ -361,7 +361,7 @@ describe("SidebandMedia", () => {
     expect(endpoint.updateEndpointMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ muted: true, deafened: true }),
     );
-    expect(remoteAudio.enabled).toBe(false);
+    expect(remoteAudio.enabled).toBe(true);
     expect(remoteVideo.enabled).toBe(true);
 
     media.setAudioState(false, false);
@@ -375,7 +375,7 @@ describe("SidebandMedia", () => {
     expect(remoteVideo.enabled).toBe(true);
   });
 
-  it("keeps newly received video enabled while deafened", async () => {
+  it("keeps newly received media enabled while deafened", async () => {
     const { media, endpoint } = await joined();
     const remoteAudio = new FakeTrack("audio", "remote-audio");
     const remoteVideo = new FakeTrack("video", "remote-screen");
@@ -394,7 +394,7 @@ describe("SidebandMedia", () => {
       metadata: { source: "screen" },
     });
 
-    expect(remoteAudio.enabled).toBe(false);
+    expect(remoteAudio.enabled).toBe(true);
     expect(remoteVideo.enabled).toBe(true);
   });
 
@@ -433,12 +433,12 @@ describe("SidebandMedia", () => {
       screenTrack,
       { kind: "video", source: "screen", displayName: "Alice" },
       undefined,
-      3_000,
+      8_000,
       screen,
     );
-    expect(screenTrack.contentHint).toBe("motion");
+    expect(screenTrack.contentHint).toBe("detail");
     expect(setParameters).toHaveBeenCalledWith({
-      degradationPreference: "maintain-framerate",
+      degradationPreference: "maintain-resolution",
       encodings: [{ maxFramerate: 30 }],
     });
     expect(events.onLocalScreen).toHaveBeenCalledWith(screen, "screen");
@@ -618,13 +618,14 @@ describe("SidebandMedia", () => {
       new FakeStream([cameraTrack]) as unknown as MediaStream,
     );
 
-    await media.setCameraEnabled(true, "Alice");
+    await media.setCameraEnabled(true, "Alice", "camera-2");
+    expect(mocks.captureCamera).toHaveBeenCalledWith("camera-2");
     expect(endpoint.addTrack).toHaveBeenCalledWith(cameraTrack, {
       kind: "video",
       source: "camera",
       displayName: "Alice",
     });
-    await media.setCameraEnabled(true, "Alice");
+    await media.setCameraEnabled(true, "Alice", "camera-2");
     await media.setCameraEnabled(false, "Alice");
     expect(endpoint.removeTrack).toHaveBeenCalledWith("video-camera");
     expect(cameraTrack.stop).toHaveBeenCalledOnce();

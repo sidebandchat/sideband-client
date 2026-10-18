@@ -9,6 +9,7 @@ export {
 
 export type {
   CallMediaAdapter,
+  CallMediaEvent,
   CallMediaState,
   CallMediaParticipant,
   CallMediaRemoteTrack,

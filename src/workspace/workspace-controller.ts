@@ -7,7 +7,7 @@ import type { ChannelId, CommunityId, ConversationId } from "../entity-id.js";
 import type { AccountState } from "../client/state.js";
 
 export type WorkspaceState = {
-  view: "friends" | "conversation" | "voice-channel";
+  view: "friends" | "conversation";
   selectedConversationId?: ConversationId;
   selectedCommunityId?: CommunityId;
   selectedChannelId?: ChannelId;
@@ -61,7 +61,7 @@ export class WorkspaceController {
         channel.channel.id,
       );
       this.set({
-        view: channelView(channel.channel),
+        view: "conversation",
         selectedConversationId: conversation.id,
         selectedCommunityId: channel.community.id,
         selectedChannelId: channel.channel.id,
@@ -92,7 +92,7 @@ export class WorkspaceController {
       channels[0];
     if (channel) this.selectedChannelByCommunity.set(community.id, channel.id);
     this.set({
-      view: channel ? channelView(channel) : "friends",
+      view: channel ? "conversation" : "friends",
       selectedCommunityId: community.id,
       selectedChannelId: channel?.id,
       selectedConversationId: channel?.conversationId,
@@ -104,7 +104,7 @@ export class WorkspaceController {
     if (!found) throw new Error("Community channel not found");
     this.selectedChannelByCommunity.set(found.community.id, found.channel.id);
     this.set({
-      view: channelView(found.channel),
+      view: "conversation",
       selectedCommunityId: found.community.id,
       selectedChannelId: found.channel.id,
       selectedConversationId: found.channel.conversationId,
@@ -225,8 +225,4 @@ export class WorkspaceController {
   private emit() {
     this.listeners.forEach((listener) => listener());
   }
-}
-
-function channelView(channel: CommunityChannel) {
-  return channel.kind === "voice" ? "voice-channel" : "conversation";
 }

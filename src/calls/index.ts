@@ -13,3 +13,8 @@ export {
   type MediaPresentationState,
   type MediaPresentationControllerOptions,
 } from "./media-presentation-controller.js";
+export type {
+  CallConnectionState,
+  CallLifecycleEvent,
+  CallRuntimeView,
+} from "./call-runtime.js";

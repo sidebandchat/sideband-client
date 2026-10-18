@@ -166,6 +166,34 @@ describe("SBP record decoding", () => {
     });
   });
 
+  it("decodes direct call lifecycle messages", () => {
+    const callId = entityId<"call">("88888888-8888-4888-8888-888888888888");
+    const record = messageRecord();
+    record.set(2, 2);
+    record.set(4, "");
+    record.set(7, [
+      4,
+      wireMap([
+        [0, entityRef("call", callId)],
+        [1, entityRef("user", USER_ID)],
+        [2, 74],
+        [3, 1],
+        [4, false],
+      ]),
+    ]);
+
+    expect(decodeMessage(throughWire(record))).toMatchObject({
+      kind: "call",
+      callEvent: {
+        callId,
+        initiatorId: USER_ID,
+        duration: 74,
+        type: "completed",
+        group: false,
+      },
+    });
+  });
+
   it("decodes a complete account snapshot", () => {
     const snapshot = wireMap([
       [0, 1],

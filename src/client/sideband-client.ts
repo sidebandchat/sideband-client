@@ -493,6 +493,14 @@ export class SidebandClient {
       this.options.privateCrypto,
       this.options.privateTransfers,
       this.options.mediaPreferences,
+      {
+        onError: (reason) => this.reportError(reason),
+        onCallUsers: (userIds) => {
+          void state
+            .ensureUserProfiles(userIds)
+            .catch((reason) => this.reportError(reason));
+        },
+      },
     );
     this.liveSessionRuntime.start();
     this.ephemeralStateController = new EphemeralStateController(
